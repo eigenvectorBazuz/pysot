@@ -85,10 +85,15 @@ def main():
     writer = None
     for frame in get_frames(args.video_name):
         if first_frame:
-            try:
-                init_rect = cv2.selectROI(video_name, frame, False, False)
-            except:
-                exit()
+            if args.init_rect:                       # <-- NEW
+                x, y, w, h = map(int, args.init_rect.split(','))
+                init_rect = (x, y, w, h)
+            else:                                    # fallback to GUI
+                try:
+                  init_rect = cv2.selectROI(video_name, frame, False, False)
+                except:
+                  exit()
+            
             tracker.init(frame, init_rect)
             # -------- open MP4 writer --------------------------------
             fourcc = cv2.VideoWriter_fourcc(*"mp4v")
