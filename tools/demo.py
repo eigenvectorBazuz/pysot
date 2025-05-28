@@ -125,7 +125,7 @@ def main():
             cv2.imshow(video_name, frame)
             cv2.waitKey(1)
             i += 1
-            if i % mod 100 = 0:
+            if i % mod 100 == 0:
               print(i)
   
     if writer is not None:
