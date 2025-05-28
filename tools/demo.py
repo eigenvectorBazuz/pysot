@@ -22,6 +22,10 @@ parser.add_argument('--config', type=str, help='config file')
 parser.add_argument('--snapshot', type=str, help='model name')
 parser.add_argument('--video_name', default='', type=str,
                     help='videos or image files')
+parser.add_argument('--init_rect', type=str, default='',
+                    help='x,y,w,h of the target in the first frame')
+parser.add_argument('--output', type=str, default='tracking_out.mp4',
+                    help='where to save the annotated video (MP4)')
 args = parser.parse_args()
 
 
@@ -78,6 +82,7 @@ def main():
     else:
         video_name = 'webcam'
     cv2.namedWindow(video_name, cv2.WND_PROP_FULLSCREEN)
+    writer = None
     for frame in get_frames(args.video_name):
         if first_frame:
             try:
@@ -85,6 +90,13 @@ def main():
             except:
                 exit()
             tracker.init(frame, init_rect)
+            # -------- open MP4 writer --------------------------------
+            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+            writer = cv2.VideoWriter(
+                args.output, fourcc, 30,           # FPS
+                (frame.shape[1], frame.shape[0])   # width, height
+            )
+            # ----------------------------------------------------------
             first_frame = False
         else:
             outputs = tracker.track(frame)
@@ -103,7 +115,14 @@ def main():
                               (0, 255, 0), 3)
             cv2.imshow(video_name, frame)
             cv2.waitKey(40)
-
+            writer.write(frame)             # save annotated frame
+            cv2.imshow(video_name, frame)
+            cv2.waitKey(1)
+  # ---------------- cleanup ----------------------------------------
+  if writer is not None:
+    writer.release()
+    print(f"[demo.py] video saved to {args.output}")
+  # -----------------------------------------------------------------
 
 if __name__ == '__main__':
     main()
