@@ -116,6 +116,7 @@ def main():
                 frame = cv2.addWeighted(frame, 0.77, mask, 0.23, -1)
             else:
                 bbox = list(map(int, outputs['bbox']))
+                print(i, outputs['best_score'])
                 cv2.rectangle(frame, (bbox[0], bbox[1]),
                               (bbox[0]+bbox[2], bbox[1]+bbox[3]),
                               (0, 255, 0), 3)
