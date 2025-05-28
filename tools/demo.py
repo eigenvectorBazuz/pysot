@@ -83,6 +83,7 @@ def main():
         video_name = 'webcam'
     cv2.namedWindow(video_name, cv2.WND_PROP_FULLSCREEN)
     writer = None
+    i = 0
     for frame in get_frames(args.video_name):
         if first_frame:
             if args.init_rect:                       # <-- NEW
@@ -123,6 +124,9 @@ def main():
             writer.write(frame)             # save annotated frame
             cv2.imshow(video_name, frame)
             cv2.waitKey(1)
+            i += 1
+            if i % mod 100 = 0:
+              print(i)
   
     if writer is not None:
       writer.release()
