@@ -29,34 +29,57 @@ parser.add_argument('--output', type=str, default='tracking_out.mp4',
 args = parser.parse_args()
 
 
+# def get_frames(video_name):
+#     if not video_name:
+#         cap = cv2.VideoCapture(0)
+#         # warmup
+#         for i in range(5):
+#             cap.read()
+#         while True:
+#             ret, frame = cap.read()
+#             if ret:
+#                 yield frame
+#             else:
+#                 break
+#     elif video_name.endswith('avi') or \
+#         video_name.endswith('mp4'):
+#         cap = cv2.VideoCapture(args.video_name)
+#         while True:
+#             ret, frame = cap.read()
+#             if ret:
+#                 yield frame
+#             else:
+#                 break
+#     else:
+#         images = glob(os.path.join(video_name, '*.jp*'))
+#         images = sorted(images,
+#                         key=lambda x: int(x.split('/')[-1].split('.')[0]))
+#         for img in images:
+#             frame = cv2.imread(img)
+#             yield frame
+
 def get_frames(video_name):
-    if not video_name:
-        cap = cv2.VideoCapture(0)
-        # warmup
-        for i in range(5):
-            cap.read()
-        while True:
-            ret, frame = cap.read()
-            if ret:
-                yield frame
-            else:
-                break
-    elif video_name.endswith('avi') or \
-        video_name.endswith('mp4'):
-        cap = cv2.VideoCapture(args.video_name)
-        while True:
-            ret, frame = cap.read()
-            if ret:
-                yield frame
-            else:
-                break
-    else:
-        images = glob(os.path.join(video_name, '*.jp*'))
-        images = sorted(images,
-                        key=lambda x: int(x.split('/')[-1].split('.')[0]))
-        for img in images:
-            frame = cv2.imread(img)
-            yield frame
+    import cv2
+    print(f"[get_frames] trying to open {video_name!r}")
+    cap = cv2.VideoCapture(video_name)
+    print("[get_frames] isOpened:", cap.isOpened())
+    if not cap.isOpened():
+        print("[get_frames] ❌ Failed to open video. Exiting generator.")
+        return
+
+    frame_idx = 0
+    while True:
+        ret, frame = cap.read()
+        print(f"[get_frames] read frame {frame_idx}: ret={ret}")
+        if not ret:
+            print("[get_frames] ⛔ No more frames (or decode error).")
+            break
+        yield frame
+        frame_idx += 1
+
+    cap.release()
+    print("[get_frames] released capture.")
+
 
 
 def main():
