@@ -118,7 +118,7 @@ def main():
             writer.write(frame)             # save annotated frame
             cv2.imshow(video_name, frame)
             cv2.waitKey(1)
-  # ---------------- cleanup ----------------------------------------
+  # ---------------- cleanup ---------------------------------------
   if writer is not None:
     writer.release()
     print(f"[demo.py] video saved to {args.output}")
