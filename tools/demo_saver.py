@@ -1,4 +1,3 @@
-```python
 # pysot/tools/demo.py
 # Patched to save tracking outputs to a data file instead of video/display
 
@@ -116,4 +115,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-```
