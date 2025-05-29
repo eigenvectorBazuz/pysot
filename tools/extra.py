@@ -97,213 +97,107 @@ def display_frame_with_bbox_and_score(frame_number, video_path, pkl_path):
 
     plt.show()
 
-
-def load_via_or_coco_annotations(json_path: str) -> Dict[str, Optional[List[int]]]:
+def load_via_annotations(json_path: str) -> Dict[int, Optional[List[int]]]:
     """
-    Load annotations from either VIA native JSON or COCO-flavored VIA export.
-    
-    Returns a dict mapping filename -> [x, y, width, height] or None.
+    Load VIA annotations mapping frame IDs to boxes or None.
     """
     with open(json_path, 'r') as f:
         raw = json.load(f)
-    
-    # Detect COCO-style export
-    if isinstance(raw, dict) and 'images' in raw and 'annotations' in raw:
-        # Build image_id -> filename map
-        id2fname = {img['id']: img['file_name'] for img in raw['images']}
-        # Initialize all to None
-        annotations: Dict[str, Optional[List[int]]] = {fname: None for fname in id2fname.values()}
-        # For each annotation, assign bbox
-        for ann in raw['annotations']:
-            img_id = ann['image_id']
-            bbox = ann.get('bbox', [])
-            if bbox and img_id in id2fname:
-                # COCO bbox: [x, y, w, h]
-                annotations[id2fname[img_id]] = bbox
-        return annotations
-    
-    # Detect VIA native export under _via_img_metadata
-    if isinstance(raw, dict) and '_via_img_metadata' in raw:
-        via_data = raw['_via_img_metadata']
-    else:
-        via_data = raw  # assume top-level mapping
-    
-    annotations: Dict[str, Optional[List[int]]] = {}
-    for entry in via_data.values():
-        if not isinstance(entry, dict):
-            continue
-        filename = entry.get('filename')
+    via_data = raw.get('_via_img_metadata', raw) if isinstance(raw, dict) else raw
+    annotations = {}
+    for entry in (via_data.values() if isinstance(via_data, dict) else via_data):
+        fname = entry['filename']
+        frame_id = int(re.search(r'\d+', fname).group())
         regions = entry.get('regions', [])
-        
         if regions:
-            shape = regions[0].get('shape_attributes', {})
-            box = [
-                shape.get('x', 0),
-                shape.get('y', 0),
-                shape.get('width', 0),
-                shape.get('height', 0),
+            shape = regions[0]['shape_attributes']
+            annotations[frame_id] = [
+                shape['x'], shape['y'], shape['width'], shape['height']
             ]
-            annotations[filename] = box
         else:
-            annotations[filename] = None
-    
+            annotations[frame_id] = None
     return annotations
 
-def filename_to_frame_id(filename: str) -> Union[int, str]:
-    """Extract integer from filename like 'frame_000123.jpg'."""
-    m = re.search(r'(\d+)', filename)
-    return int(m.group(1)) if m else filename
-
-def build_frame_indexed_annotations(json_path: str) -> Dict[int, Optional[List[int]]]:
+def load_pred_with_scores(pkl_path: str) -> Dict[int, Optional[Tuple[List[float], float]]]:
     """
-    Load annotations and return dict mapping frame index -> box or None.
+    Load tracker predictions (list of dicts) preserving bbox and best_score.
+    Returns mapping frame_id -> (bbox, score) or None.
     """
-    raw = load_via_or_coco_annotations(json_path)
-    indexed: Dict[int, Optional[List[int]]] = {}
-    for fname, box in raw.items():
-        fid = filename_to_frame_id(fname)
-        if isinstance(fid, int):
-            indexed[fid] = box
-    return indexed
-
-# Example usage:
-# annotations = load_via_or_coco_annotations('via_project_29May2025_18h19m_coco.json')
-# indexed = build_frame_indexed_annotations('via_project_29May2025_18h19m_coco.json')
-# print(indexed.get(0), indexed.get(189))
-
-
-
-
-def load_pred_pkl_list_of_dicts(pkl_path: str) -> Dict[int, Optional[List[float]]]:
-    """
-    Load tracker predictions saved as a list of dicts from pickle.
-    Each element is expected to be a dict with a 'bbox' key (list of 4 numbers)
-    or to be None.
-
-    Returns a dict mapping frame index (list index) -> [x, y, w, h] or None.
-    """
-    with open(pkl_path, 'rb') as f:
-        raw = pickle.load(f)
-    
-    if not isinstance(raw, list):
-        raise ValueError(f"Expected a list in pickle, got {type(raw)}")
-    
-    preds: Dict[int, Optional[List[float]]] = {}
+    raw = pickle.load(open(pkl_path, 'rb'))
+    preds = {}
     for idx, entry in enumerate(raw):
         if entry is None:
             preds[idx] = None
-        elif isinstance(entry, dict) and 'bbox' in entry:
-            # Extract the bbox and convert to floats
-            try:
-                bbox = entry['bbox']
-                preds[idx] = [float(coord) for coord in bbox]
-            except Exception:
-                preds[idx] = None
+        elif isinstance(entry, dict) and 'bbox' in entry and 'best_score' in entry:
+            bbox = [float(coord) for coord in entry['bbox']]
+            score = float(entry['best_score'])
+            preds[idx] = (bbox, score)
         else:
             preds[idx] = None
     return preds
 
-# Example usage:
-# pred_indexed = load_pred_pkl_list_of_dicts('/content/drive/MyDrive/samp/tracking_data.pkl')
-# print(pred_indexed.get(0), pred_indexed.get(189))
-
-
-# Example:
-# pred_indexed = load_pred_pkl('/content/tracking_data.pkl')
-# print(pred_indexed.get(0), pred_indexed.get(189))
-
-
-# Example usage:
-# pred_indexed = load_pred_pkl('tracker_results.pkl')
-# print(pred_indexed.get(0), pred_indexed.get(189))
-
-
-
-
-def compute_tracker_kpi_ignore_no_gt(
+def compute_kpi_with_score(
     gt: Dict[int, Optional[List[int]]],
-    preds: Dict[int, Optional[List[float]]],
-    iou_thresh: float = 0.5
+    preds: Dict[int, Optional[Tuple[List[float], float]]],
+    iou_thresh: float = 0.5,
+    score_thresh: float = 0.95
 ) -> Dict[str, Union[int, float]]:
     """
-    Compute tracker KPI metrics, **ignoring** frames where GT is None.
-    
-    Only considers frames with a GT bounding box present.
-    
-    Parameters
-    ----------
-    gt : dict[int, [x,y,w,h] or None]
-    preds : dict[int, [x,y,w,h] or None]
-    iou_thresh : float
-        IoU threshold to count a true positive.
-    
-    Returns
-    -------
-    Dict[str, Union[int, float]]
-        Metrics: total_gt_frames, TP, FP, FN, low_IoU, precision, recall, f1
+    Compute KPI including frames with no GT. Apply score threshold to predictions.
+    Returns TP, FP, FN, TN, low_IoU counts and metrics.
     """
-    def iou(boxA, boxB):
-        xa, ya, wa, ha = boxA
-        xb, yb, wb, hb = boxB
+    def iou(a, b):
+        xa, ya, wa, ha = a
+        xb, yb, wb, hb = b
         xa2, ya2 = xa + wa, ya + ha
         xb2, yb2 = xb + wb, yb + hb
-
         xi1, yi1 = max(xa, xb), max(ya, yb)
         xi2, yi2 = min(xa2, xb2), min(ya2, yb2)
-        inter_w, inter_h = max(0, xi2 - xi1), max(0, yi2 - yi1)
-        inter = inter_w * inter_h
-        union = wa * ha + wb * hb - inter
-        return inter / union if union > 0 else 0.0
+        inter = max(0, xi2 - xi1) * max(0, yi2 - yi1)
+        union = wa*ha + wb*hb - inter
+        return inter/union if union > 0 else 0.0
 
-    # Only consider frames where GT exists
-    eval_frames = [f for f, box in gt.items() if box is not None]
+    frames = sorted(gt.keys())  # GT frames include both present and None
+    TP = FP = FN = TN = low_iou = 0
 
-    TP = FP = FN = low_iou = 0
-
-    for f in eval_frames:
-        g = gt[f]
-        p = preds.get(f)
-
-        if p is None:
-            # missed detection
-            FN += 1
+    for f in frames:
+        gt_box = gt[f]
+        pred_entry = preds.get(f)
+        # treat low-score or missing as no prediction
+        if pred_entry is None or pred_entry[1] < score_thresh:
+            pred_box = None
         else:
-            # both present → check IoU
-            overlap = iou(g, p)
-            if overlap >= iou_thresh:
-                TP += 1
-            else:
-                low_iou += 1
-                FP += 1
-                FN += 1
+            pred_box = pred_entry[0]
 
-    precision = TP / (TP + FP) if (TP + FP) > 0 else 0.0
-    recall    = TP / (TP + FN) if (TP + FN) > 0 else 0.0
-    f1        = (2 * precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+        if gt_box is None:
+            if pred_box is None:
+                TN += 1
+            else:
+                FP += 1
+        else:
+            # GT present
+            if pred_box is None:
+                FN += 1
+            else:
+                overlap = iou(gt_box, pred_box)
+                if overlap >= iou_thresh:
+                    TP += 1
+                else:
+                    low_iou += 1
+                    FP += 1
+                    FN += 1
+
+    precision = TP / (TP + FP) if TP + FP > 0 else 0.0
+    recall    = TP / (TP + FN) if TP + FN > 0 else 0.0
+    f1        = 2 * precision * recall / (precision + recall) if precision + recall > 0 else 0.0
+    success   = (TP + TN) / len(frames) if frames else 0.0
 
     return {
-        "total_gt_frames": len(eval_frames),
-        "TP": TP,
-        "FP": FP,
-        "FN": FN,
+        "total_frames": len(frames),
+        "TP": TP, "FP": FP, "FN": FN, "TN": TN,
         "low_IoU": low_iou,
         "precision": precision,
         "recall": recall,
         "f1": f1,
+        "success_rate": success,
     }
-
-# Example usage:
-# metrics = compute_tracker_kpi_ignore_no_gt(gt_indexed, pred_indexed, iou_thresh=0.5)
-# print(metrics)
-
-
-# Example usage:
-# gt_indexed = build_frame_indexed_annotations('via_annotations.json')
-# pred_indexed = load_pred_pkl('tracker_results.pkl')
-# metrics = compute_tracker_kpi(gt_indexed, pred_indexed, iou_thresh=0.5)
-# print(metrics)
-
-
-
-
-
