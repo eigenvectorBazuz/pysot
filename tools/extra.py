@@ -7,6 +7,9 @@ import imageio.v3 as iio
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import pickle
+import json
+import re
+from typing import Dict, List, Optional, Union
 
 def sample_frames(video_path: str, output_dir: str, num_samples: int):
     # Open video
@@ -93,6 +96,81 @@ def display_frame_with_bbox_and_score(frame_number, video_path, pkl_path):
                 transform=ax.transAxes, ha='center', va='center', fontsize=14)
 
     plt.show()
+
+
+def load_via_or_coco_annotations(json_path: str) -> Dict[str, Optional[List[int]]]:
+    """
+    Load annotations from either VIA native JSON or COCO-flavored VIA export.
+    
+    Returns a dict mapping filename -> [x, y, width, height] or None.
+    """
+    with open(json_path, 'r') as f:
+        raw = json.load(f)
+    
+    # Detect COCO-style export
+    if isinstance(raw, dict) and 'images' in raw and 'annotations' in raw:
+        # Build image_id -> filename map
+        id2fname = {img['id']: img['file_name'] for img in raw['images']}
+        # Initialize all to None
+        annotations: Dict[str, Optional[List[int]]] = {fname: None for fname in id2fname.values()}
+        # For each annotation, assign bbox
+        for ann in raw['annotations']:
+            img_id = ann['image_id']
+            bbox = ann.get('bbox', [])
+            if bbox and img_id in id2fname:
+                # COCO bbox: [x, y, w, h]
+                annotations[id2fname[img_id]] = bbox
+        return annotations
+    
+    # Detect VIA native export under _via_img_metadata
+    if isinstance(raw, dict) and '_via_img_metadata' in raw:
+        via_data = raw['_via_img_metadata']
+    else:
+        via_data = raw  # assume top-level mapping
+    
+    annotations: Dict[str, Optional[List[int]]] = {}
+    for entry in via_data.values():
+        if not isinstance(entry, dict):
+            continue
+        filename = entry.get('filename')
+        regions = entry.get('regions', [])
+        
+        if regions:
+            shape = regions[0].get('shape_attributes', {})
+            box = [
+                shape.get('x', 0),
+                shape.get('y', 0),
+                shape.get('width', 0),
+                shape.get('height', 0),
+            ]
+            annotations[filename] = box
+        else:
+            annotations[filename] = None
+    
+    return annotations
+
+def filename_to_frame_id(filename: str) -> Union[int, str]:
+    """Extract integer from filename like 'frame_000123.jpg'."""
+    m = re.search(r'(\d+)', filename)
+    return int(m.group(1)) if m else filename
+
+def build_frame_indexed_annotations(json_path: str) -> Dict[int, Optional[List[int]]]:
+    """
+    Load annotations and return dict mapping frame index -> box or None.
+    """
+    raw = load_via_or_coco_annotations(json_path)
+    indexed: Dict[int, Optional[List[int]]] = {}
+    for fname, box in raw.items():
+        fid = filename_to_frame_id(fname)
+        if isinstance(fid, int):
+            indexed[fid] = box
+    return indexed
+
+# Example usage:
+# annotations = load_via_or_coco_annotations('via_project_29May2025_18h19m_coco.json')
+# indexed = build_frame_indexed_annotations('via_project_29May2025_18h19m_coco.json')
+# print(indexed.get(0), indexed.get(189))
+
 
 
 
