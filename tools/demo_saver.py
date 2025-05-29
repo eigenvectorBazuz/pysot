@@ -91,6 +91,7 @@ def main():
     outputs_list = []
     first_frame = True
 
+    i = 0
     for frame in get_frames(args.video_name):
         if first_frame:
             # initial bounding box
@@ -106,6 +107,9 @@ def main():
         else:
             outputs = tracker.track(frame)
             outputs_list.append(outputs)
+        i += 1
+        if i % 100 == 0:
+            print(i)
 
     # save the tracking data
     with open(args.data_output, 'wb') as f:
