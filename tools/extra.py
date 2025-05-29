@@ -174,3 +174,136 @@ def build_frame_indexed_annotations(json_path: str) -> Dict[int, Optional[List[i
 
 
 
+def load_pred_pkl_list_of_dicts(pkl_path: str) -> Dict[int, Optional[List[float]]]:
+    """
+    Load tracker predictions saved as a list of dicts from pickle.
+    Each element is expected to be a dict with a 'bbox' key (list of 4 numbers)
+    or to be None.
+
+    Returns a dict mapping frame index (list index) -> [x, y, w, h] or None.
+    """
+    with open(pkl_path, 'rb') as f:
+        raw = pickle.load(f)
+    
+    if not isinstance(raw, list):
+        raise ValueError(f"Expected a list in pickle, got {type(raw)}")
+    
+    preds: Dict[int, Optional[List[float]]] = {}
+    for idx, entry in enumerate(raw):
+        if entry is None:
+            preds[idx] = None
+        elif isinstance(entry, dict) and 'bbox' in entry:
+            # Extract the bbox and convert to floats
+            try:
+                bbox = entry['bbox']
+                preds[idx] = [float(coord) for coord in bbox]
+            except Exception:
+                preds[idx] = None
+        else:
+            preds[idx] = None
+    return preds
+
+# Example usage:
+# pred_indexed = load_pred_pkl_list_of_dicts('/content/drive/MyDrive/samp/tracking_data.pkl')
+# print(pred_indexed.get(0), pred_indexed.get(189))
+
+
+# Example:
+# pred_indexed = load_pred_pkl('/content/tracking_data.pkl')
+# print(pred_indexed.get(0), pred_indexed.get(189))
+
+
+# Example usage:
+# pred_indexed = load_pred_pkl('tracker_results.pkl')
+# print(pred_indexed.get(0), pred_indexed.get(189))
+
+
+
+
+def compute_tracker_kpi_ignore_no_gt(
+    gt: Dict[int, Optional[List[int]]],
+    preds: Dict[int, Optional[List[float]]],
+    iou_thresh: float = 0.5
+) -> Dict[str, Union[int, float]]:
+    """
+    Compute tracker KPI metrics, **ignoring** frames where GT is None.
+    
+    Only considers frames with a GT bounding box present.
+    
+    Parameters
+    ----------
+    gt : dict[int, [x,y,w,h] or None]
+    preds : dict[int, [x,y,w,h] or None]
+    iou_thresh : float
+        IoU threshold to count a true positive.
+    
+    Returns
+    -------
+    Dict[str, Union[int, float]]
+        Metrics: total_gt_frames, TP, FP, FN, low_IoU, precision, recall, f1
+    """
+    def iou(boxA, boxB):
+        xa, ya, wa, ha = boxA
+        xb, yb, wb, hb = boxB
+        xa2, ya2 = xa + wa, ya + ha
+        xb2, yb2 = xb + wb, yb + hb
+
+        xi1, yi1 = max(xa, xb), max(ya, yb)
+        xi2, yi2 = min(xa2, xb2), min(ya2, yb2)
+        inter_w, inter_h = max(0, xi2 - xi1), max(0, yi2 - yi1)
+        inter = inter_w * inter_h
+        union = wa * ha + wb * hb - inter
+        return inter / union if union > 0 else 0.0
+
+    # Only consider frames where GT exists
+    eval_frames = [f for f, box in gt.items() if box is not None]
+
+    TP = FP = FN = low_iou = 0
+
+    for f in eval_frames:
+        g = gt[f]
+        p = preds.get(f)
+
+        if p is None:
+            # missed detection
+            FN += 1
+        else:
+            # both present → check IoU
+            overlap = iou(g, p)
+            if overlap >= iou_thresh:
+                TP += 1
+            else:
+                low_iou += 1
+                FP += 1
+                FN += 1
+
+    precision = TP / (TP + FP) if (TP + FP) > 0 else 0.0
+    recall    = TP / (TP + FN) if (TP + FN) > 0 else 0.0
+    f1        = (2 * precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+
+    return {
+        "total_gt_frames": len(eval_frames),
+        "TP": TP,
+        "FP": FP,
+        "FN": FN,
+        "low_IoU": low_iou,
+        "precision": precision,
+        "recall": recall,
+        "f1": f1,
+    }
+
+# Example usage:
+# metrics = compute_tracker_kpi_ignore_no_gt(gt_indexed, pred_indexed, iou_thresh=0.5)
+# print(metrics)
+
+
+# Example usage:
+# gt_indexed = build_frame_indexed_annotations('via_annotations.json')
+# pred_indexed = load_pred_pkl('tracker_results.pkl')
+# metrics = compute_tracker_kpi(gt_indexed, pred_indexed, iou_thresh=0.5)
+# print(metrics)
+
+
+
+
+
