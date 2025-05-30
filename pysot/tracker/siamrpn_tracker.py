@@ -160,5 +160,6 @@ class SiamRPNTracker(SiameseTracker):
         best_score = score[best_idx]
         return {
                 'bbox': bbox,
-                'best_score': best_score
+                'best_score': best_score,
+                'pscore': pscore
                }
