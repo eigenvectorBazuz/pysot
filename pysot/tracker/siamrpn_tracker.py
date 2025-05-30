@@ -111,7 +111,7 @@ class SiamRPNTracker(SiameseTracker):
 
         score = self._convert_score(outputs['cls'])
         pred_bbox = self._convert_bbox(outputs['loc'], self.anchors)
-        print(score, pred_bbox)
+        # print(score, pred_bbox)
 
         def change(r):
             return np.maximum(r, 1. / r)
