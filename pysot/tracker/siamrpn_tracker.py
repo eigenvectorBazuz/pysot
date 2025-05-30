@@ -107,6 +107,7 @@ class SiamRPNTracker(SiameseTracker):
                                     round(s_x), self.channel_average)
 
         outputs = self.model.track(x_crop)
+        print(outputs)
 
         score = self._convert_score(outputs['cls'])
         pred_bbox = self._convert_bbox(outputs['loc'], self.anchors)
