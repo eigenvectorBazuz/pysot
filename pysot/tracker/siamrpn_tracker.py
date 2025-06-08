@@ -241,6 +241,7 @@ class SiamRPNTracker(SiameseTracker):
     #             width,
     #             height]
     #     best_score = score[best_idx]
+          print('new')
     #     return {
     #             'bbox': bbox,
     #             'best_score': best_score,
