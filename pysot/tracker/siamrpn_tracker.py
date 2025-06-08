@@ -138,7 +138,7 @@ class SiamRPNTracker(SiameseTracker):
         best_idx = np.argmax(pscore)
     
         # --- NEW: top-k candidates before smoothing & clipping ---
-        k = 10
+        k = 400
         # get top-k indices sorted descending
         topk_inds = np.argsort(pscore)[-k:][::-1]
         # convert and scale these bboxes
