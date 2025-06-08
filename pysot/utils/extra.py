@@ -7,6 +7,8 @@ import imageio.v3 as iio
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import pickle
+from typing import Optional
+
 
 def sample_frames(video_path: str, output_dir: str, num_samples: int):
     # Open video
@@ -93,5 +95,73 @@ def display_frame_with_bbox_and_score(frame_number, video_path, pkl_path):
                 transform=ax.transAxes, ha='center', va='center', fontsize=14)
 
     plt.show()
+
+
+
+def annotate_video(
+    video_path: str,
+    pkl_path: str,
+    output_path: str,
+    score_thresh: float = 0.95,
+    codec: str = "mp4v",
+    fps: Optional[float] = None
+):
+    """
+    Create an annotated video overlaying bboxes and scores on each frame.
+    Frames with best_score < score_thresh are left unannotated.
+    
+    Args:
+        video_path:     path to input video
+        pkl_path:       path to pickle list of dicts with 'bbox' and 'best_score'
+        output_path:    path for the output mp4
+        score_thresh:   only show annotations if best_score >= this
+        codec:          fourcc code for VideoWriter (default 'mp4v')
+        fps:            if None, will use input video's fps
+    """
+    # Load predictions
+    with open(pkl_path, "rb") as f:
+        preds = pickle.load(f)
+    
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise RuntimeError(f"Cannot open video: {video_path}")
+    
+    in_fps = cap.get(cv2.CAP_PROP_FPS)
+    w     = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h     = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    out_fps = fps if fps is not None else in_fps
+    
+    fourcc = cv2.VideoWriter_fourcc(*codec)
+    writer = cv2.VideoWriter(output_path, fourcc, out_fps, (w, h))
+    
+    frame_idx = 0
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        
+        # overlay if prediction exists and score >= thresh
+        entry = preds[frame_idx] if frame_idx < len(preds) else None
+        if isinstance(entry, dict):
+            bbox  = entry.get("bbox", None)
+            score = entry.get("best_score", -1.0)
+            if bbox and score >= score_thresh:
+                x, y, bw, bh = map(int, bbox)
+                # draw box
+                cv2.rectangle(frame, (x, y), (x + bw, y + bh), (0, 0, 255), 2)
+                # draw score
+                txt = f"{score:.3f}"
+                cv2.putText(
+                    frame, txt, (x, max(y-10, 0)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2
+                )
+        
+        writer.write(frame)
+        frame_idx += 1
+    
+    cap.release()
+    writer.release()
+    print(f"Annotated video saved to {output_path}")
+
 
 
