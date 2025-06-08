@@ -95,71 +95,154 @@ class SiamRPNTracker(SiameseTracker):
         args:
             img(np.ndarray): BGR image
         return:
-            bbox(list):[x, y, width, height]
+            dict with keys:
+              - 'bbox': [x, y, width, height]  # best box
+              - 'best_score': float           # score of best box
+              - 'pscore': np.ndarray          # penalized scores for all anchors
+              - 'candidates': list of [x, y, w, h]  # top-k boxes (before smoothing)
+              - 'candidate_score': list of float    # corresponding penalized scores
         """
+        # compute context-adjusted exemplar and instance sizes
         w_z = self.size[0] + cfg.TRACK.CONTEXT_AMOUNT * np.sum(self.size)
         h_z = self.size[1] + cfg.TRACK.CONTEXT_AMOUNT * np.sum(self.size)
         s_z = np.sqrt(w_z * h_z)
         scale_z = cfg.TRACK.EXEMPLAR_SIZE / s_z
         s_x = s_z * (cfg.TRACK.INSTANCE_SIZE / cfg.TRACK.EXEMPLAR_SIZE)
+    
+        # crop search region
         x_crop = self.get_subwindow(img, self.center_pos,
                                     cfg.TRACK.INSTANCE_SIZE,
                                     round(s_x), self.channel_average)
-
+    
+        # run SiamRPN
         outputs = self.model.track(x_crop)
-        # print(outputs)
-
         score = self._convert_score(outputs['cls'])
         pred_bbox = self._convert_bbox(outputs['loc'], self.anchors)
-        # print(score, pred_bbox)
-
-        def change(r):
-            return np.maximum(r, 1. / r)
-
-        def sz(w, h):
-            pad = (w + h) * 0.5
-            return np.sqrt((w + pad) * (h + pad))
-
-        # scale penalty
+    
+        # helper functions
+        def change(r): return np.maximum(r, 1. / r)
+        def sz(w, h): return np.sqrt((w + (w + h) * 0.5) * (h + (w + h) * 0.5))
+    
+        # apply penalties
         s_c = change(sz(pred_bbox[2, :], pred_bbox[3, :]) /
-                     (sz(self.size[0]*scale_z, self.size[1]*scale_z)))
-
-        # aspect ratio penalty
-        r_c = change((self.size[0]/self.size[1]) /
-                     (pred_bbox[2, :]/pred_bbox[3, :]))
+                     sz(self.size[0] * scale_z, self.size[1] * scale_z))
+        r_c = change((self.size[0] / self.size[1]) /
+                     (pred_bbox[2, :] / pred_bbox[3, :]))
         penalty = np.exp(-(r_c * s_c - 1) * cfg.TRACK.PENALTY_K)
         pscore = penalty * score
-
-        # window penalty
+        # window influence
         pscore = pscore * (1 - cfg.TRACK.WINDOW_INFLUENCE) + \
-            self.window * cfg.TRACK.WINDOW_INFLUENCE
+                 self.window * cfg.TRACK.WINDOW_INFLUENCE
+    
+        # best index
         best_idx = np.argmax(pscore)
-
+    
+        # --- NEW: top-k candidates before smoothing & clipping ---
+        k = 10
+        # get top-k indices sorted descending
+        topk_inds = np.argsort(pscore)[-k:][::-1]
+        # convert and scale these bboxes
+        topk_bboxes = (pred_bbox[:, topk_inds] / scale_z).T.tolist()
+        topk_scores = pscore[topk_inds].tolist()
+    
+        # retrieve best prediction for state update
         bbox = pred_bbox[:, best_idx] / scale_z
         lr = penalty[best_idx] * score[best_idx] * cfg.TRACK.LR
-
         cx = bbox[0] + self.center_pos[0]
         cy = bbox[1] + self.center_pos[1]
-
-        # smooth bbox
         width = self.size[0] * (1 - lr) + bbox[2] * lr
         height = self.size[1] * (1 - lr) + bbox[3] * lr
-
-        # clip boundary
-        cx, cy, width, height = self._bbox_clip(cx, cy, width,
-                                                height, img.shape[:2])
-
-        # udpate state
+        cx, cy, width, height = self._bbox_clip(cx, cy, width, height, img.shape[:2])
+    
+        # update state
         self.center_pos = np.array([cx, cy])
         self.size = np.array([width, height])
-
-        bbox = [cx - width / 2,
-                cy - height / 2,
-                width,
-                height]
+    
+        # final best bbox
+        best_bbox = [cx - width / 2,
+                     cy - height / 2,
+                     width,
+                     height]
         best_score = score[best_idx]
+    
         return {
-                'bbox': bbox,
-                'best_score': best_score,
-                'pscore': pscore
-               }
+            'bbox': best_bbox,
+            'best_score': best_score,
+            'pscore': pscore,
+            'candidates': topk_bboxes,
+            'candidate_score': topk_scores
+        }
+
+    # def track(self, img):
+    #     """
+    #     args:
+    #         img(np.ndarray): BGR image
+    #     return:
+    #         bbox(list):[x, y, width, height]
+    #     """
+    #     w_z = self.size[0] + cfg.TRACK.CONTEXT_AMOUNT * np.sum(self.size)
+    #     h_z = self.size[1] + cfg.TRACK.CONTEXT_AMOUNT * np.sum(self.size)
+    #     s_z = np.sqrt(w_z * h_z)
+    #     scale_z = cfg.TRACK.EXEMPLAR_SIZE / s_z
+    #     s_x = s_z * (cfg.TRACK.INSTANCE_SIZE / cfg.TRACK.EXEMPLAR_SIZE)
+    #     x_crop = self.get_subwindow(img, self.center_pos,
+    #                                 cfg.TRACK.INSTANCE_SIZE,
+    #                                 round(s_x), self.channel_average)
+
+    #     outputs = self.model.track(x_crop)
+    #     # print(outputs)
+
+    #     score = self._convert_score(outputs['cls'])
+    #     pred_bbox = self._convert_bbox(outputs['loc'], self.anchors)
+    #     # print(score, pred_bbox)
+
+    #     def change(r):
+    #         return np.maximum(r, 1. / r)
+
+    #     def sz(w, h):
+    #         pad = (w + h) * 0.5
+    #         return np.sqrt((w + pad) * (h + pad))
+
+    #     # scale penalty
+    #     s_c = change(sz(pred_bbox[2, :], pred_bbox[3, :]) /
+    #                  (sz(self.size[0]*scale_z, self.size[1]*scale_z)))
+
+    #     # aspect ratio penalty
+    #     r_c = change((self.size[0]/self.size[1]) /
+    #                  (pred_bbox[2, :]/pred_bbox[3, :]))
+    #     penalty = np.exp(-(r_c * s_c - 1) * cfg.TRACK.PENALTY_K)
+    #     pscore = penalty * score
+
+    #     # window penalty
+    #     pscore = pscore * (1 - cfg.TRACK.WINDOW_INFLUENCE) + \
+    #         self.window * cfg.TRACK.WINDOW_INFLUENCE
+    #     best_idx = np.argmax(pscore)
+
+    #     bbox = pred_bbox[:, best_idx] / scale_z
+    #     lr = penalty[best_idx] * score[best_idx] * cfg.TRACK.LR
+
+    #     cx = bbox[0] + self.center_pos[0]
+    #     cy = bbox[1] + self.center_pos[1]
+
+    #     # smooth bbox
+    #     width = self.size[0] * (1 - lr) + bbox[2] * lr
+    #     height = self.size[1] * (1 - lr) + bbox[3] * lr
+
+    #     # clip boundary
+    #     cx, cy, width, height = self._bbox_clip(cx, cy, width,
+    #                                             height, img.shape[:2])
+
+    #     # udpate state
+    #     self.center_pos = np.array([cx, cy])
+    #     self.size = np.array([width, height])
+
+    #     bbox = [cx - width / 2,
+    #             cy - height / 2,
+    #             width,
+    #             height]
+    #     best_score = score[best_idx]
+    #     return {
+    #             'bbox': bbox,
+    #             'best_score': best_score,
+    #             'pscore': pscore
+    #            }
