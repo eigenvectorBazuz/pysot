@@ -166,13 +166,13 @@ class SiamRPNTracker(SiameseTracker):
         # best index
         best_idx = np.argmax(pscore)
     
-        # --- NEW: top-k candidates before smoothing & clipping ---
-        k = 30
-        # get top-k indices sorted descending
-        topk_inds = np.argsort(pscore)[-k:][::-1]
-        # convert and scale these bboxes
-        topk_bboxes = (pred_bbox[:, topk_inds] / scale_z).T.tolist()
-        topk_scores = pscore[topk_inds].tolist()
+        # # --- NEW: top-k candidates before smoothing & clipping ---
+        # k = 30
+        # # get top-k indices sorted descending
+        # topk_inds = np.argsort(pscore)[-k:][::-1]
+        # # convert and scale these bboxes
+        # topk_bboxes = (pred_bbox[:, topk_inds] / scale_z).T.tolist()
+        # topk_scores = pscore[topk_inds].tolist()
     
         # retrieve best prediction for state update
         bbox = pred_bbox[:, best_idx] / scale_z
@@ -193,6 +193,26 @@ class SiamRPNTracker(SiameseTracker):
                      width,
                      height]
         best_score = score[best_idx]
+
+        # 1) pick top-k *final* scores
+        topk_inds    = np.argsort(final_score)[-k:][::-1]
+        
+        # 2) grab the raw bbox deltas (dx, dy, w, h) from the RPN
+        candidates   = (pred_bbox[:, topk_inds] / scale_z)   # shape = (4, k)
+        
+        # 3) compute their absolute centers
+        cx           = candidates[0] + self.center_pos[0]
+        cy           = candidates[1] + self.center_pos[1]
+        w            = candidates[2]
+        h            = candidates[3]
+        
+        # 4) convert center coords -> top-left [x,y,w,h]
+        x            = cx - w/2
+        y            = cy - h/2
+        
+        # 5) stack & transpose into a (k,4) list
+        topk_bboxes  = np.stack([x, y, w, h], axis=1).tolist()
+        topk_scores  = final_score[topk_inds].tolist()
     
         return {
             'bbox': best_bbox,
