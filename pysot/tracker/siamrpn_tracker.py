@@ -90,17 +90,19 @@ class SiamRPNTracker(SiameseTracker):
                                     s_z, self.channel_average)
         self.model.template(z_crop)
 
-    def track(self, img):
+    def track(self, img, mask=None):
         """
         args:
-            img(np.ndarray): BGR image
-        return:
+            img (np.ndarray): BGR image
+            mask (np.ndarray or None): optional binary mask (same HxW as img) where
+                0 indicates regions to ignore, 1 indicates valid regions.
+        returns:
             dict with keys:
-              - 'bbox': [x, y, width, height]  # best box
-              - 'best_score': float           # score of best box
-              - 'pscore': np.ndarray          # penalized scores for all anchors
-              - 'candidates': list of [x, y, w, h]  # top-k boxes (before smoothing)
-              - 'candidate_score': list of float    # corresponding penalized scores
+              - 'bbox': [x, y, width, height]        # best box
+              - 'best_score': float                  # raw score of best box
+              - 'pscore': np.ndarray                 # penalized scores for all anchors
+              - 'candidates': list of [x, y, w, h]    # top-k boxes (pre-smoothing)
+              - 'candidate_score': list of float     # corresponding penalized scores
         """
         # compute context-adjusted exemplar and instance sizes
         w_z = self.size[0] + cfg.TRACK.CONTEXT_AMOUNT * np.sum(self.size)
@@ -118,6 +120,17 @@ class SiamRPNTracker(SiameseTracker):
         outputs = self.model.track(x_crop)
         score = self._convert_score(outputs['cls'])
         pred_bbox = self._convert_bbox(outputs['loc'], self.anchors)
+
+        # if mask provided, filter out anchors whose centers fall in masked-out regions
+        if mask is not None:
+            # compute absolute center coords: rel coords / scale_z + center_pos
+            abs_centers = pred_bbox[:2, :] / scale_z + self.center_pos.reshape(2, 1)
+            # clip centers to image bounds
+            abs_x = np.clip(abs_centers[0].astype(int), 0, mask.shape[1]-1)
+            abs_y = np.clip(abs_centers[1].astype(int), 0, mask.shape[0]-1)
+            mask_vals = mask[abs_y, abs_x]
+            # zero out scores where mask==0
+            score = score * mask_vals
     
         # helper functions
         def change(r): return np.maximum(r, 1. / r)
