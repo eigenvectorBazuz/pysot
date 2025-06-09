@@ -15,9 +15,33 @@ import torch
 import numpy as np
 from glob import glob
 
+import easyocr
+
 from pysot.core.config import cfg
 from pysot.models.model_builder import ModelBuilder
 from pysot.tracker.tracker_builder import build_tracker
+
+def get_text_mask(img_shape, detections):
+    """
+    Build a binary mask that zeros out all detected text regions.
+
+    Args:
+        img_shape (tuple): shape of the image as (H, W[, C])
+        detections (list): List of (box, text, score), where
+            box is a list of 4 [x, y] corner points.
+
+    Returns:
+        mask (np.ndarray): uint8 mask of shape (H, W), with 0 in text areas and 1 elsewhere.
+    """
+    H, W = img_shape[:2]
+    mask = np.ones((H, W), dtype=np.uint8)
+
+    for box, _, _ in detections:
+        # box is [[x0,y0], [x1,y1], [x2,y2], [x3,y3]]
+        pts = np.array(box, dtype=np.int32).reshape((-1, 1, 2))
+        cv2.fillPoly(mask, [pts], 0)
+
+    return mask
 
 
 def get_frames(video_name):
@@ -74,6 +98,8 @@ def main():
         '--data_output', type=str, default='tracking_data.pkl',
         help='where to save the tracking outputs as a pickle'
     )
+    parser.add_argument('--filter_hud',    action='store_true',
+                    help='whether to zero out any detected HUD/text regions')
     args = parser.parse_args()
 
     # load config and model
@@ -86,6 +112,9 @@ def main():
         map_location=lambda storage, loc: storage.cpu()))
     model.eval().to(device)
     tracker = build_tracker(model)
+
+    if args.filter_hud:
+        reader = easyocr.Reader(['en'], gpu=True)
 
     # prepare for tracking
     outputs_list = []
@@ -105,7 +134,12 @@ def main():
             tracker.init(frame, init_rect)
             first_frame = False
         else:
-            outputs = tracker.track(frame)
+            if args.filter_hud:
+                ocr_dets = reader.readtext(np.array(frame))
+                mask = get_text_mask(frame.shape, ocr_dets)
+            else:
+                mask = None
+            outputs = tracker.track(frame, mask)
             outputs_list.append(outputs)
         i += 1
         if i % 100 == 0:
