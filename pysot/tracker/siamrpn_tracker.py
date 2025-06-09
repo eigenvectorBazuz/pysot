@@ -152,7 +152,7 @@ class SiamRPNTracker(SiameseTracker):
         best_idx = int(np.argmax(pscore))
 
         # 2) top-k candidates
-        k = 30
+        k = 400
         topk_inds     = np.argsort(pscore)[-k:][::-1]
         topk_bboxes   = self._deltas_to_bboxes(
                             pred_bbox[:, topk_inds],
