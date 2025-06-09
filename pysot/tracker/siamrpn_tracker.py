@@ -91,134 +91,75 @@ class SiamRPNTracker(SiameseTracker):
         self.model.template(z_crop)
 
     def track(self, img, mask=None):
-        """
-        args:
-            img (np.ndarray): BGR image
-            mask (np.ndarray or None): optional binary mask (same HxW as img) where
-                0 indicates regions to ignore, 1 indicates valid regions.
-        returns:
-            dict with keys:
-              - 'bbox': [x, y, width, height]        # best box
-              - 'best_score': float                  # raw score of best box
-              - 'pscore': np.ndarray                 # penalized scores for all anchors
-              - 'candidates': list of [x, y, w, h]    # top-k boxes (pre-smoothing)
-              - 'candidate_score': list of float     # corresponding penalized scores
-        """
-        # compute context-adjusted exemplar and instance sizes
         w_z = self.size[0] + cfg.TRACK.CONTEXT_AMOUNT * np.sum(self.size)
         h_z = self.size[1] + cfg.TRACK.CONTEXT_AMOUNT * np.sum(self.size)
         s_z = np.sqrt(w_z * h_z)
         scale_z = cfg.TRACK.EXEMPLAR_SIZE / s_z
         s_x = s_z * (cfg.TRACK.INSTANCE_SIZE / cfg.TRACK.EXEMPLAR_SIZE)
-    
-        # crop search region
         x_crop = self.get_subwindow(img, self.center_pos,
                                     cfg.TRACK.INSTANCE_SIZE,
                                     round(s_x), self.channel_average)
-    
-        # run SiamRPN
-        outputs = self.model.track(x_crop)
-        score = self._convert_score(outputs['cls'])
+
+        outputs   = self.model.track(x_crop)
+        score     = self._convert_score(outputs['cls'])
         pred_bbox = self._convert_bbox(outputs['loc'], self.anchors)
-    
-        # helper functions
+
+        # penalties
         def change(r): return np.maximum(r, 1. / r)
-        def sz(w, h): return np.sqrt((w + (w + h) * 0.5) * (h + (w + h) * 0.5))
-    
-        # apply penalties
-        s_c = change(sz(pred_bbox[2, :], pred_bbox[3, :]) /
-                     sz(self.size[0] * scale_z, self.size[1] * scale_z))
-        r_c = change((self.size[0] / self.size[1]) /
-                     (pred_bbox[2, :] / pred_bbox[3, :]))
+        def sz(w, h): return np.sqrt((w + (w+h)*0.5) * (h + (w+h)*0.5))
+
+        s_c     = change(sz(pred_bbox[2], pred_bbox[3]) /
+                         sz(self.size[0]*scale_z, self.size[1]*scale_z))
+        r_c     = change((self.size[0]/self.size[1]) /
+                         (pred_bbox[2]/pred_bbox[3]))
         penalty = np.exp(-(r_c * s_c - 1) * cfg.TRACK.PENALTY_K)
+
+        # penalized & windowed score
         pscore = penalty * score
-        # window influence
         pscore = pscore * (1 - cfg.TRACK.WINDOW_INFLUENCE) + \
                  self.window * cfg.TRACK.WINDOW_INFLUENCE
-        
-        if mask is not None:
-            # absolute center coords
-            abs_centers = pred_bbox[:2, :] / scale_z + self.center_pos.reshape(2, 1)
-            # widths and heights in absolute image space
-            abs_ws = (pred_bbox[2, :] / scale_z) / 2
-            abs_hs = (pred_bbox[3, :] / scale_z) / 2
 
-            H, W = mask.shape
-            keep = np.ones_like(score, dtype=bool)
+        # 1) single best
+        best_idx = int(np.argmax(pscore))
 
-            # vectorized corner computation
-            xs = abs_centers[0]
-            ys = abs_centers[1]
-            x1 = np.clip((xs - abs_ws).astype(int), 0, W-1)
-            x2 = np.clip((xs + abs_ws).astype(int), 0, W-1)
-            y1 = np.clip((ys - abs_hs).astype(int), 0, H-1)
-            y2 = np.clip((ys + abs_hs).astype(int), 0, H-1)
+        # 2) top-k candidates
+        k = 30
+        topk_inds     = np.argsort(pscore)[-k:][::-1]
+        topk_bboxes   = self._deltas_to_bboxes(
+                            pred_bbox[:, topk_inds],
+                            scale_z,
+                            self.center_pos,
+                            img.shape[:2]
+                        )
+        topk_scores   = pscore[topk_inds].tolist()
 
-            for i in range(score.shape[0]):
-                # if *any* pixel in the box is masked-out, drop it
-                if mask[y1[i]:y2[i]+1, x1[i]:x2[i]+1].min() == 0:
-                    keep[i] = False
+        # convert that single best delta → image-space bbox
+        best_delta = pred_bbox[:, best_idx:best_idx+1]  # shape (4,1)
+        bx, by, bw, bh = self._deltas_to_bboxes(
+                            best_delta, scale_z, self.center_pos, img.shape[:2]
+                        )[0]
 
-            score    = score    * keep
-            penalty  = penalty  * keep
-            pscore   = pscore   * keep
-    
-        # best index
-        best_idx = np.argmax(pscore)
-    
-        # # --- NEW: top-k candidates before smoothing & clipping ---
-        # k = 30
-        # # get top-k indices sorted descending
-        # topk_inds = np.argsort(pscore)[-k:][::-1]
-        # # convert and scale these bboxes
-        # topk_bboxes = (pred_bbox[:, topk_inds] / scale_z).T.tolist()
-        # topk_scores = pscore[topk_inds].tolist()
-    
-        # retrieve best prediction for state update
-        bbox = pred_bbox[:, best_idx] / scale_z
+        # smooth & clip as before
         lr = penalty[best_idx] * score[best_idx] * cfg.TRACK.LR
-        cx = bbox[0] + self.center_pos[0]
-        cy = bbox[1] + self.center_pos[1]
-        width = self.size[0] * (1 - lr) + bbox[2] * lr
-        height = self.size[1] * (1 - lr) + bbox[3] * lr
-        cx, cy, width, height = self._bbox_clip(cx, cy, width, height, img.shape[:2])
-    
+        cx = bx + bw/2
+        cy = by + bh/2
+
+        width, height = (
+            self.size[0] * (1 - lr) + bw * lr,
+            self.size[1] * (1 - lr) + bh * lr
+        )
+        cx, cy, width, height = self._bbox_clip(
+            cx, cy, width, height, img.shape[:2]
+        )
+
         # update state
         self.center_pos = np.array([cx, cy])
-        self.size = np.array([width, height])
-    
-        # final best bbox
-        best_bbox = [cx - width / 2,
-                     cy - height / 2,
-                     width,
-                     height]
-        best_score = score[best_idx]
+        self.size       = np.array([width, height])
 
-        # 1) pick top-k *final* scores
-        topk_inds    = np.argsort(final_score)[-k:][::-1]
-        
-        # 2) grab the raw bbox deltas (dx, dy, w, h) from the RPN
-        candidates   = (pred_bbox[:, topk_inds] / scale_z)   # shape = (4, k)
-        
-        # 3) compute their absolute centers
-        cx           = candidates[0] + self.center_pos[0]
-        cy           = candidates[1] + self.center_pos[1]
-        w            = candidates[2]
-        h            = candidates[3]
-        
-        # 4) convert center coords -> top-left [x,y,w,h]
-        x            = cx - w/2
-        y            = cy - h/2
-        
-        # 5) stack & transpose into a (k,4) list
-        topk_bboxes  = np.stack([x, y, w, h], axis=1).tolist()
-        topk_scores  = final_score[topk_inds].tolist()
-    
         return {
-            'bbox': best_bbox,
-            'best_score': best_score,
-            'pscore': pscore,
-            'candidates': topk_bboxes,
+            'bbox':            [cx - width/2, cy - height/2, width, height],
+            'best_score':      float(score[best_idx]),
+            'candidates':      topk_bboxes,
             'candidate_score': topk_scores
         }
 
