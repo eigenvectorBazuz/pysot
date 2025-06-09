@@ -59,6 +59,35 @@ class SiamRPNTracker(SiameseTracker):
         score = F.softmax(score, dim=1).data[:, 1].cpu().numpy()
         return score
 
+    def _deltas_to_bboxes(self, deltas, scale_z, center_pos, img_shape):
+        """
+        deltas: np.array shape (4, N) of [dx, dy, w, h] in RPN frame
+        scale_z: float
+        center_pos: np.array([cx, cy])
+        img_shape: tuple (H, W)
+        returns: list of N [x, y, w, h] in image coords
+        """
+        raw = deltas / scale_z        # undo search/exemplar scaling
+        dx, dy, dw, dh = raw
+
+        # compute absolute centers
+        cx = dx + center_pos[0]
+        cy = dy + center_pos[1]
+
+        # to top-left
+        x = cx - dw / 2
+        y = cy - dh / 2
+
+        # clip into image bounds
+        H, W = img_shape
+        x  = np.clip(x, 0, W)
+        y  = np.clip(y, 0, H)
+        dw = np.clip(dw, 1, W)
+        dh = np.clip(dh, 1, H)
+
+        boxes = np.stack([x, y, dw, dh], axis=1)  # (N,4)
+        return boxes.tolist()
+
     def _bbox_clip(self, cx, cy, width, height, boundary):
         cx = max(0, min(cx, boundary[1]))
         cy = max(0, min(cy, boundary[0]))
