@@ -135,7 +135,7 @@ def main():
             tracker.init(frame, init_rect)
             first_frame = False
         else:
-            if args.filter_hud and outputs['best_score'] < 0.7:
+            if i > 1 and args.filter_hud and outputs['best_score'] < 0.7:
                 ocr_dets = reader.readtext(np.array(frame))
                 mask = get_text_mask(frame.shape, ocr_dets)
                 print(f'frame {i}: running HUD filter')
