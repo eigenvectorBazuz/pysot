@@ -15,6 +15,8 @@ import torch
 import numpy as np
 from glob import glob
 
+import matplotlib.pyplot as plt
+
 import easyocr
 
 from pysot.core.config import cfg
