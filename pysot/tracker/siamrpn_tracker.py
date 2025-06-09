@@ -120,17 +120,6 @@ class SiamRPNTracker(SiameseTracker):
         outputs = self.model.track(x_crop)
         score = self._convert_score(outputs['cls'])
         pred_bbox = self._convert_bbox(outputs['loc'], self.anchors)
-
-        # if mask provided, filter out anchors whose centers fall in masked-out regions
-        if mask is not None:
-            # compute absolute center coords: rel coords / scale_z + center_pos
-            abs_centers = pred_bbox[:2, :] / scale_z + self.center_pos.reshape(2, 1)
-            # clip centers to image bounds
-            abs_x = np.clip(abs_centers[0].astype(int), 0, mask.shape[1]-1)
-            abs_y = np.clip(abs_centers[1].astype(int), 0, mask.shape[0]-1)
-            mask_vals = mask[abs_y, abs_x]
-            # zero out scores where mask==0
-            score = score * mask_vals
     
         # helper functions
         def change(r): return np.maximum(r, 1. / r)
@@ -148,7 +137,31 @@ class SiamRPNTracker(SiameseTracker):
                  self.window * cfg.TRACK.WINDOW_INFLUENCE
         
         if mask is not None:
-             pscore[mask_vals == 0] = 0
+            # absolute center coords
+            abs_centers = pred_bbox[:2, :] / scale_z + self.center_pos.reshape(2, 1)
+            # widths and heights in absolute image space
+            abs_ws = (pred_bbox[2, :] / scale_z) / 2
+            abs_hs = (pred_bbox[3, :] / scale_z) / 2
+
+            H, W = mask.shape
+            keep = np.ones_like(score, dtype=bool)
+
+            # vectorized corner computation
+            xs = abs_centers[0]
+            ys = abs_centers[1]
+            x1 = np.clip((xs - abs_ws).astype(int), 0, W-1)
+            x2 = np.clip((xs + abs_ws).astype(int), 0, W-1)
+            y1 = np.clip((ys - abs_hs).astype(int), 0, H-1)
+            y2 = np.clip((ys + abs_hs).astype(int), 0, H-1)
+
+            for i in range(score.shape[0]):
+                # if *any* pixel in the box is masked-out, drop it
+                if mask[y1[i]:y2[i]+1, x1[i]:x2[i]+1].min() == 0:
+                    keep[i] = False
+
+            score    = score    * keep
+            penalty  = penalty  * keep
+            pscore   = pscore   * keep
     
         # best index
         best_idx = np.argmax(pscore)
