@@ -138,7 +138,7 @@ def main():
             if args.filter_hud:
                 ocr_dets = reader.readtext(np.array(frame))
                 mask = get_text_mask(frame.shape, ocr_dets)
-                print(np.sum(mask))
+                # print(np.sum(mask))
             else:
                 mask = None
             outputs = tracker.track(frame, mask)
